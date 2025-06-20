@@ -1,32 +1,40 @@
 import React, { useState, useEffect, useMemo } from "react";
 import AdminLayout from "../../components/AdminLayout";
 import { useData } from "../../context/DataContext";
+import MonthlyReportTable from "../../components/MonthlyReportTable";
 import Swal from "sweetalert2";
 import * as XLSX from "xlsx";
 import Calendar from "react-calendar";
 import "react-calendar/dist/Calendar.css";
 import {
-  Clock,
-  Users,
-  MapPin,
-  Camera,
-  FileText,
-  AlertTriangle,
-  TrendingUp,
-  Smartphone,
   CalendarCheck,
-  BarChart3,
-  Search,
-  ChevronUp,
-  ChevronDown,
-  CheckCircle,
-  XCircle,
-  Calendar as CalendarIcon,
-  Download,
+  Users,
+  Smartphone,
+  Camera,
+  Eye,
+  EyeOff,
+  Zap,
   Save,
+  Download,
   LogIn,
   LogOut,
+  UserCheck,
+  UserX,
+  Filter,
+  ChevronUp,
+  ChevronDown,
+  Search,
+  CheckCircle,
+  XCircle,
+  TrendingUp,
+  BarChart3,
+  AlertTriangle,
+  Settings,
+  Calendar as CalendarIcon,
 } from "lucide-react";
+
+import { collection, getDocs, setDoc, doc } from "firebase/firestore";
+import { db } from "../../firebase";
 
 export default function Attendance() {
   const {
@@ -42,7 +50,8 @@ export default function Attendance() {
   const processedPayrolls = [];
   const [selectedMonth, setSelectedMonth] = useState(new Date().getMonth());
   const [selectedYear, setSelectedYear] = useState(new Date().getFullYear());
-  const selectedDate = new Date(selectedYear, selectedMonth, 1);
+  const selectedDate = useMemo(() => new Date(selectedYear, selectedMonth, 1), [selectedMonth, selectedYear]);
+
   const [selectedStudents, setSelectedStudents] = useState({});
   const [selectedTeachers, setSelectedTeachers] = useState({});
   const [teacherTimeRecords, setTeacherTimeRecords] = useState({});
@@ -55,16 +64,42 @@ export default function Attendance() {
   const [showStats, setShowStats] = useState(true);
   const [isLoading, setIsLoading] = useState(false);
   const [compactReportView, setCompactReportView] = useState(true);
+  const [showCalendar, setShowCalendar] = useState(false);
+  const [quickMarkMode, setQuickMarkMode] = useState(false);
+  const [selectedAll, setSelectedAll] = useState(false);
 
   const today = new Date().toISOString().split("T")[0];
   const currentTime = new Date().toLocaleTimeString("en-US", { hour12: false, hour: "2-digit", minute: "2-digit" });
 
   useEffect(() => {
-    setIsLoading(true);
-    initializeAttendance();
-    setIsLoading(false);
-    setTeacherTimeRecords({}); // Reset time records on date change
-  }, [attendance, teacherAttendance, filterDate]);
+    const fetchFirebaseAttendance = async () => {
+      try {
+        const studentSnap = await getDocs(collection(db, "attendance"));
+        const teacherSnap = await getDocs(collection(db, "teacherAttendance"));
+
+        const studentData = [];
+        studentSnap.forEach((doc) => studentData.push(doc.data()));
+
+        const teacherData = [];
+        teacherSnap.forEach((doc) => teacherData.push(doc.data()));
+
+        setAttendance(studentData);
+        setTeacherAttendance(teacherData);
+      } catch (error) {
+        console.error("Error fetching attendance from Firebase:", error);
+      }
+    };
+
+    fetchFirebaseAttendance();
+  }, []);
+
+  useEffect(() => {
+    localStorage.setItem("attendance", JSON.stringify(attendance));
+  }, [attendance]);
+
+  useEffect(() => {
+    localStorage.setItem("teacherAttendance", JSON.stringify(teacherAttendance));
+  }, [teacherAttendance]);
 
   const isPreviousMonthProcessed = (month, year) => {
     const prev = new Date(year, month - 1);
@@ -72,50 +107,18 @@ export default function Attendance() {
       (p) => p.month === prev.getMonth() && p.year === prev.getFullYear()
     );
   };
-
-  const handleSalaryProcessCheck = () => {
-    for (const teacher of teachers) {
-      const teacherJoinDate = new Date(teacher.joiningDate);
-
-      if (selectedDate < teacherJoinDate) {
-        Swal.fire({
-          icon: "error",
-          title: "Invalid Month",
-          text: `${teacher.name} joined on ${teacher.joiningDate}. You cannot process salary for earlier months.`,
-        });
-        return false;
-      }
-
-      if (selectedDate > teacherJoinDate && !isPreviousMonthProcessed(selectedMonth, selectedYear)) {
-        const prevMonthName = selectedDate.toLocaleString("default", { month: "long" });
-        const prevMonthYear = selectedMonth === 0 ? selectedYear - 1 : selectedYear;
-
-        Swal.fire({
-          icon: "warning",
-          title: "Previous Month Not Processed",
-          text: `You must process salary for ${prevMonthName} ${prevMonthYear} before processing this month.`,
-          confirmButtonColor: "#E74C3C",
-        });
-        return false;
-      }
-    }
-    Swal.fire({
-      icon: "success",
-      title: "Ready",
-      text: `Salary for ${selectedDate.toLocaleString("default", { month: "long" })} ${selectedYear} can be processed.`,
-    });
-    return true;
-  };
-
 const datesArray = useMemo(() => {
-  const [year, month] = filterDate.split('-').map(Number);
+  const year = selectedYear;
+  const month = selectedMonth + 1; // 0-indexed to 1-indexed
   const daysInMonth = new Date(year, month, 0).getDate();
-  
+
   return Array.from({ length: daysInMonth }, (_, i) => {
-    const day = (i + 1).toString().padStart(2, '0');
-    return `${year}-${month.toString().padStart(2, '0')}-${day}`;
+    const day = (i + 1).toString().padStart(2, "0");
+    return `${year}-${month.toString().padStart(2, "0")}-${day}`; // ✅ YYYY-MM-DD format
   });
-}, [filterDate]);
+}, [selectedYear, selectedMonth]);
+
+
 
   const initializeAttendance = () => {
     const dayStudentAttendance = (attendance || []).filter((a) => a?.date === filterDate);
@@ -198,6 +201,16 @@ const datesArray = useMemo(() => {
         }
       );
     }
+
+    Swal.fire({
+      icon: "success",
+      title: `${timeType === "in" ? "Clock In" : "Clock Out"} Successful`,
+      text: `Time: ${currentTime}`,
+      timer: 2000,
+      showConfirmButton: false,
+      toast: true,
+      position: "top-end",
+    });
   };
 
   const handleMarkAll = (status, isTeacher = false) => {
@@ -216,9 +229,21 @@ const datesArray = useMemo(() => {
       });
       setSelectedStudents(allSelected);
     }
+    setSelectedAll(status === "present");
   };
 
-  const handleSubmit = (isTeacher = false) => {
+  const handleQuickMark = (id, status, isTeacher = false) => {
+    if (isTeacher) {
+      setSelectedTeachers((prev) => ({ ...prev, [id]: status }));
+      if (status === "present") {
+        handleTimeUpdate(id, "inTime", currentTime);
+      }
+    } else {
+      setSelectedStudents((prev) => ({ ...prev, [id]: status }));
+    }
+  };
+
+  const handleSubmit = async (isTeacher = false) => {
     const selectedData = isTeacher ? selectedTeachers : selectedStudents;
     const filteredData = isTeacher ? filteredTeachers : filteredStudents;
 
@@ -250,6 +275,17 @@ const datesArray = useMemo(() => {
 
     const setFunction = isTeacher ? setTeacherAttendance : setAttendance;
     setFunction([...filteredAttendance, ...newEntries]);
+
+    // ✅ Save to Firebase
+    await Promise.all(
+      newEntries.map((entry) => {
+        const id = `${entry.date}_${isTeacher ? entry.teacherId : entry.studentId}`;
+        return setDoc(
+          doc(db, isTeacher ? "teacherAttendance" : "attendance", id),
+          entry
+        );
+      })
+    );
 
     const presentCount = Object.values(selectedData).filter((s) => s === "present").length;
     const absentCount = filteredData.length - presentCount;
@@ -381,6 +417,7 @@ const datesArray = useMemo(() => {
     datesArray.forEach((date) => {
       monthlyData[date] = {};
       items.forEach((item) => {
+        if (!item.id) return;
         const record = data.find(
           (a) => a?.date === date && a?.[`${isTeacher ? "teacherId" : "studentId"}`] === item.id
         );
@@ -398,204 +435,279 @@ const datesArray = useMemo(() => {
     return items.length > 0 && records.length < items.length;
   };
 
-  const monthlyAttendanceData = getMonthlyAttendance(activeTab === "teachers");
+  const monthlyAttendanceData = useMemo(() => {
+    const isTeacher = activeTab === "monthly-teachers";
+    const data = isTeacher ? teacherAttendance : attendance;
+    const items = isTeacher ? teachers : students;
+
+    const monthlyData = {};
+
+    datesArray.forEach((date) => {
+      monthlyData[date] = {};
+      items.forEach((item) => {
+        if (!item?.id) return;
+        const record = data.find((a) => a?.date === date && a?.[isTeacher ? "teacherId" : "studentId"] === item.id);
+        monthlyData[date][item.id] = record ? record.status : "N/A";
+      });
+    });
+
+    return monthlyData;
+  }, [activeTab, attendance, teacherAttendance, datesArray]);
+
+
+  const averageAttendance = useMemo(() => {
+    const items = activeTab === "monthly-teachers" ? filteredTeachers : filteredStudents;
+    return Math.round(
+      items.reduce((acc, item) => {
+        const presentDays = datesArray.filter(
+          (date) => monthlyAttendanceData[date]?.[item.id] === "present"
+        ).length;
+        const totalDays = datesArray.filter(
+          (date) => monthlyAttendanceData[date]?.[item.id] !== "N/A"
+        ).length;
+        return acc + (totalDays > 0 ? (presentDays / totalDays) * 100 : 0);
+      }, 0) / (items.length || 1)
+    );
+  }, [activeTab, filteredTeachers, filteredStudents, monthlyAttendanceData, datesArray]);
 
   return (
     <AdminLayout>
-      <div className="space-y-6">
-        <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
-          <div>
-            <h2 className="text-3xl font-bold text-[#2E86C1] flex items-center gap-2">
-              <CalendarCheck size={32} /> Enhanced Attendance
+      <div className="space-y-4 sm:space-y-6 p-2 sm:p-4">
+        {/* Header Section */}
+        <div className="flex flex-col space-y-4 lg:flex-row lg:items-center lg:justify-between lg:space-y-0">
+          <div className="flex-1">
+            <h2 className="text-2xl sm:text-3xl font-bold text-[#2E86C1] flex items-center gap-2">
+              <CalendarCheck size={24} className="sm:w-8 sm:h-8" />
+              <span className="hidden sm:inline">Attendance</span>
+              <span className="sm:hidden">Attendance</span>
             </h2>
-            <p className="text-gray-600 mt-1">Comprehensive attendance management system</p>
+            <p className="text-gray-600 mt-1 text-sm sm:text-base">Comprehensive attendance management</p>
           </div>
-          <div className="flex items-center gap-3">
-            <div className="bg-gradient-to-r from-blue-500 to-purple-600 text-white px-4 py-2 rounded-lg shadow-lg">
-              <div className="text-sm opacity-90">Today</div>
-              <div className="font-bold">{new Date().toLocaleDateString()}</div>
+
+          <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 sm:gap-3">
+            <div className="bg-gradient-to-r from-blue-500 to-purple-600 text-white px-3 py-2 rounded-lg shadow-lg text-center sm:text-left">
+              <div className="text-xs opacity-90">Today</div>
+              <div className="font-bold text-sm">{new Date().toLocaleDateString()}</div>
             </div>
             <button
               onClick={exportAttendance}
-              className="bg-green-600 text-white px-4 py-2 rounded-lg hover:bg-green-700 transition-colors flex items-center gap-2 shadow-lg"
+              className="bg-green-600 text-white px-4 py-2 rounded-lg hover:bg-green-700 transition-colors flex items-center justify-center gap-2 shadow-lg text-sm sm:text-base"
             >
-              <Download size={20} /> Export
+              <Download size={16} className="sm:w-5 sm:h-5" /> Export
             </button>
           </div>
         </div>
 
-        <div className="bg-white rounded-lg shadow-lg p-4">
-          <div className="flex flex-wrap gap-2 mb-4">
-            <button
-              onClick={() => setAttendanceMode("manual")}
-              className={`px-4 py-2 rounded-lg flex items-center gap-2 transition-colors ${
-                attendanceMode === "manual" ? "bg-blue-600 text-white" : "bg-gray-100 text-gray-700"
-              }`}
-            >
-              <Users size={16} /> Manual Entry
-            </button>
-            <button
-              onClick={() => setAttendanceMode("qr")}
-              className={`px-4 py-2 rounded-lg flex items-center gap-2 transition-colors ${
-                attendanceMode === "qr" ? "bg-blue-600 text-white" : "bg-gray-100 text-gray-700"
-              }`}
-            >
-              <Smartphone size={16} /> QR Code
-            </button>
-            <button
-              onClick={() => setAttendanceMode("biometric")}
-              className={`px-4 py-2 rounded-lg flex items-center gap-2 transition-colors ${
-                attendanceMode === "biometric" ? "bg-blue-600 text-white" : "bg-gray-100 text-gray-700"
-              }`}
-            >
-              <Camera size={16} /> Biometric
-            </button>
+        {/* Attendance Mode Selection */}
+        <div className="bg-white rounded-lg shadow-lg p-3 sm:p-4">
+          <div className="flex flex-col sm:flex-row gap-2 mb-4">
+            <div className="flex flex-wrap gap-2 flex-1">
+              <button
+                onClick={() => setAttendanceMode("manual")}
+                className={`px-3 py-2 rounded-lg flex items-center gap-2 transition-all text-sm ${attendanceMode === "manual"
+                  ? "bg-blue-600 text-white shadow-lg transform scale-105"
+                  : "bg-gray-100 text-gray-700 hover:bg-gray-200"
+                  }`}
+              >
+                <Users size={14} /> Manual
+              </button>
+              <button
+                onClick={() => setAttendanceMode("qr")}
+                className={`px-3 py-2 rounded-lg flex items-center gap-2 transition-all text-sm ${attendanceMode === "qr"
+                  ? "bg-blue-600 text-white shadow-lg transform scale-105"
+                  : "bg-gray-100 text-gray-700 hover:bg-gray-200"
+                  }`}
+              >
+                <Smartphone size={14} /> QR Code
+              </button>
+              <button
+                onClick={() => setAttendanceMode("biometric")}
+                className={`px-3 py-2 rounded-lg flex items-center gap-2 transition-all text-sm ${attendanceMode === "biometric"
+                  ? "bg-blue-600 text-white shadow-lg transform scale-105"
+                  : "bg-gray-100 text-gray-700 hover:bg-gray-200"
+                  }`}
+              >
+                <Camera size={14} /> Biometric
+              </button>
+            </div>
+
+            <div className="flex gap-2">
+              <button
+                onClick={() => setQuickMarkMode(!quickMarkMode)}
+                className={`px-3 py-2 rounded-lg flex items-center gap-2 transition-all text-sm ${quickMarkMode
+                  ? "bg-orange-600 text-white"
+                  : "bg-orange-100 text-orange-700 hover:bg-orange-200"
+                  }`}
+              >
+                <Zap size={14} /> Quick Mark
+              </button>
+              <button
+                onClick={() => setShowStats(!showStats)}
+                className="px-3 py-2 rounded-lg flex items-center gap-2 transition-colors text-sm bg-gray-100 text-gray-700 hover:bg-gray-200"
+              >
+                {showStats ? <EyeOff size={14} /> : <Eye size={14} />}
+                {showStats ? "Hide Stats" : "Show Stats"}
+              </button>
+            </div>
           </div>
         </div>
 
+        {/* Main Content */}
         <div className="bg-white rounded-lg shadow-lg overflow-hidden">
-          <div className="flex border-b">
+          {/* Tab Navigation */}
+          <div className="flex border-b overflow-x-auto">
             <button
-              className={`px-6 py-3 font-medium flex items-center gap-2 transition-colors ${
-                activeTab === "students"
-                  ? "border-b-2 border-[#2E86C1] text-[#2E86C1] bg-blue-50"
-                  : "text-gray-500 hover:text-gray-700"
-              }`}
+              className={`px-4 py-3 font-medium flex items-center gap-2 transition-colors whitespace-nowrap text-sm ${activeTab === "students"
+                ? "border-b-2 border-[#2E86C1] text-[#2E86C1] bg-blue-50"
+                : "text-gray-500 hover:text-gray-700"
+                }`}
               onClick={() => setActiveTab("students")}
             >
-              <Users size={20} /> Students ({filteredStudents.length})
+              <Users size={16} className="sm:w-5 sm:h-5" />
+              Students ({filteredStudents.length})
             </button>
             <button
-              className={`px-6 py-3 font-medium flex items-center gap-2 transition-colors ${
-                activeTab === "teachers"
-                  ? "border-b-2 border-[#2E86C1] text-[#2E86C1] bg-blue-50"
-                  : "text-gray-500 hover:text-gray-700"
-              }`}
+              className={`px-4 py-3 font-medium flex items-center gap-2 transition-colors whitespace-nowrap text-sm ${activeTab === "teachers"
+                ? "border-b-2 border-[#2E86C1] text-[#2E86C1] bg-blue-50"
+                : "text-gray-500 hover:text-gray-700"
+                }`}
               onClick={() => setActiveTab("teachers")}
             >
-              <Users size={20} /> Teachers ({filteredTeachers.length})
+              <Users size={16} className="sm:w-5 sm:h-5" />
+              Teachers ({filteredTeachers.length})
             </button>
             <button
-              className={`px-6 py-3 font-medium flex items-center gap-2 transition-colors ${
-                activeTab === "monthly"
-                  ? "border-b-2 border-[#2E86C1] text-[#2E86C1] bg-blue-50"
-                  : "text-gray-500 hover:text-gray-700"
-              }`}
+              className={`px-4 py-3 font-medium flex items-center gap-2 transition-colors whitespace-nowrap text-sm ${activeTab === "monthly"
+                ? "border-b-2 border-[#2E86C1] text-[#2E86C1] bg-blue-50"
+                : "text-gray-500 hover:text-gray-700"
+                }`}
               onClick={() => setActiveTab("monthly")}
             >
-              <CalendarIcon size={20} /> Monthly Report
+              <CalendarIcon size={16} className="sm:w-5 sm:h-5" />
+              Monthly Report
             </button>
           </div>
 
+          {/* Stats Section */}
           {showStats && activeTab !== "monthly" && (
-            <div className="p-6 bg-gradient-to-r from-blue-50 to-purple-50">
-              <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-                <div className="bg-white p-4 rounded-lg shadow border-l-4 border-green-500">
+            <div className="p-4 sm:p-6 bg-gradient-to-r from-blue-50 to-purple-50">
+              <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
+                <div className="bg-white p-3 sm:p-4 rounded-lg shadow border-l-4 border-green-500">
                   <div className="flex justify-between items-center">
                     <div>
-                      <p className="text-sm text-gray-500">Present</p>
-                      <p className="text-2xl font-bold text-green-600">{presentCount}</p>
+                      <p className="text-xs sm:text-sm text-gray-500">Present</p>
+                      <p className="text-xl sm:text-2xl font-bold text-green-600">{presentCount}</p>
                     </div>
-                    <CheckCircle className="text-green-500" size={24} />
+                    <CheckCircle className="text-green-500 w-5 h-5 sm:w-6 sm:h-6" />
                   </div>
                 </div>
-                <div className="bg-white p-4 rounded-lg shadow border-l-4 border-red-500">
+                <div className="bg-white p-3 sm:p-4 rounded-lg shadow border-l-4 border-red-500">
                   <div className="flex justify-between items-center">
                     <div>
-                      <p className="text-sm text-gray-500">Absent</p>
-                      <p className="text-2xl font-bold text-red-600">{absentCount}</p>
+                      <p className="text-xs sm:text-sm text-gray-500">Absent</p>
+                      <p className="text-xl sm:text-2xl font-bold text-red-600">{absentCount}</p>
                     </div>
-                    <XCircle className="text-red-500" size={24} />
+                    <XCircle className="text-red-500 w-5 h-5 sm:w-6 sm:h-6" />
                   </div>
                 </div>
-                <div className="bg-white p-4 rounded-lg shadow border-l-4 border-[#2E86C1]">
+                <div className="bg-white p-3 sm:p-4 rounded-lg shadow border-l-4 border-[#2E86C1]">
                   <div className="flex justify-between items-center">
                     <div>
-                      <p className="text-sm text-gray-500">Attendance %</p>
-                      <p className="text-2xl font-bold text-[#2E86C1]">{attendancePercentage}%</p>
+                      <p className="text-xs sm:text-sm text-gray-500">Attendance %</p>
+                      <p className="text-xl sm:text-2xl font-bold text-[#2E86C1]">{attendancePercentage}%</p>
                     </div>
-                    <TrendingUp className="text-[#2E86C1]" size={24} />
+                    <TrendingUp className="text-[#2E86C1] w-5 h-5 sm:w-6 sm:h-6" />
                   </div>
                 </div>
-                <div className="bg-white p-4 rounded-lg shadow border-l-4 border-purple-500">
+                <div className="bg-white p-3 sm:p-4 rounded-lg shadow border-l-4 border-purple-500">
                   <div className="flex justify-between items-center">
                     <div>
-                      <p className="text-sm text-gray-500">Total</p>
-                      <p className="text-2xl font-bold text-purple-600">{currentFiltered.length}</p>
+                      <p className="text-xs sm:text-sm text-gray-500">Total</p>
+                      <p className="text-xl sm:text-2xl font-bold text-purple-600">{currentFiltered.length}</p>
                     </div>
-                    <BarChart3 className="text-purple-500" size={24} />
+                    <BarChart3 className="text-purple-500 w-5 h-5 sm:w-6 sm:h-6" />
                   </div>
                 </div>
               </div>
             </div>
           )}
 
+          {/* Calendar Section */}
           {activeTab !== "monthly" && (
             <div className="p-4 bg-gray-50">
-              <h3 className="font-medium text-gray-800 mb-4 flex items-center gap-2">
-                <CalendarIcon size={20} /> Select Date
-              </h3>
-              <Calendar
-                value={new Date(filterDate)}
-                onChange={(date) => setFilterDate(date.toISOString().split("T")[0])}
-                maxDate={new Date()}
-                className="rounded-lg shadow-lg"
-              />
+              <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+                <h3 className="font-medium text-gray-800 flex items-center gap-2 text-sm sm:text-base">
+                  <CalendarIcon size={16} className="sm:w-5 sm:h-5" /> Select Date
+                </h3>
+                <button
+                  onClick={() => setShowCalendar(!showCalendar)}
+                  className="sm:hidden bg-blue-100 text-blue-700 px-3 py-2 rounded-lg flex items-center gap-2 text-sm"
+                >
+                  <CalendarIcon size={14} />
+                  {showCalendar ? "Hide Calendar" : "Show Calendar"}
+                </button>
+              </div>
+
+              <div className={`mt-4 ${showCalendar ? "block" : "hidden"} sm:block`}>
+                <div className="sm:hidden mb-4">
+                  <input
+                    type="date"
+                    value={filterDate}
+                    onChange={(e) => setFilterDate(e.target.value)}
+                    className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-[#2E86C1] focus:border-transparent"
+                  />
+                </div>
+                <div className="hidden sm:block">
+                  <Calendar
+                    value={new Date(filterDate)}
+                    onChange={(date) => setFilterDate(date.toISOString().split("T")[0])}
+                    maxDate={new Date()}
+                    className="rounded-lg shadow-lg w-full"
+                  />
+                </div>
+              </div>
             </div>
           )}
 
+          {/* Filters Section */}
           {activeTab !== "monthly" && (
             <div className="p-4 border-b bg-gray-50">
               <div
                 className="flex justify-between items-center cursor-pointer mb-4"
                 onClick={() => setExpandedFilters(!expandedFilters)}
               >
-                <h3 className="font-medium text-gray-800 flex items-center gap-2">
-                  <Search size={20} /> Filters & Search
+                <h3 className="font-medium text-gray-800 flex items-center gap-2 text-sm sm:text-base">
+                  <Filter size={16} className="sm:w-5 sm:h-5" /> Filters & Search
                 </h3>
-                {expandedFilters ? <ChevronUp size={20} /> : <ChevronDown size={20} />}
+                {expandedFilters ? <ChevronUp size={16} className="sm:w-5 sm:h-5" /> : <ChevronDown size={16} className="sm:w-5 sm:h-5" />}
               </div>
-
-              {expandedFilters && (
-                <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+              <div className={`transition-all duration-300 ${expandedFilters ? "block" : "hidden"}`}>
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
                   <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">Search</label>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                      Search by Name/ID
+                    </label>
                     <div className="relative">
-                      <Search
-                        size={16}
-                        className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400"
-                      />
+                      <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 w-4 h-4" />
                       <input
                         type="text"
-                        placeholder="Search by name or ID"
-                        className="pl-10 w-full p-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-[#2E86C1] focus:border-transparent"
+                        placeholder="Search..."
                         value={searchTerm}
                         onChange={(e) => setSearchTerm(e.target.value)}
+                        className="w-full pl-10 pr-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-[#2E86C1] focus:border-transparent text-sm"
                       />
                     </div>
                   </div>
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">Date</label>
-                    <div className="relative">
-                      <CalendarIcon
-                        size={16}
-                        className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400"
-                      />
-                      <input
-                        type="date"
-                        className="pl-10 w-full p-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-[#2E86C1] focus:border-transparent"
-                        value={filterDate}
-                        onChange={(e) => setFilterDate(e.target.value)}
-                      />
-                    </div>
-                  </div>
+
                   {activeTab === "students" && (
                     <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-1">Class</label>
+                      <label className="block text-sm font-medium text-gray-700 mb-2">
+                        Filter by Class
+                      </label>
                       <select
-                        className="w-full p-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-[#2E86C1] focus:border-transparent"
                         value={filterClass}
                         onChange={(e) => setFilterClass(e.target.value)}
+                        className="w-full p-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-[#2E86C1] focus:border-transparent text-sm"
                       >
                         <option value="All">All Classes</option>
                         {classes.map((cls) => (
@@ -606,269 +718,367 @@ const datesArray = useMemo(() => {
                       </select>
                     </div>
                   )}
-                  <div className="flex items-end gap-2">
-                    <button
-                      onClick={() => handleMarkAll("present", activeTab === "teachers")}
-                      className="flex-1 bg-green-100 text-green-700 px-3 py-2 rounded-lg hover:bg-green-200 transition-colors flex items-center justify-center gap-2"
-                    >
-                      <CheckCircle size={16} /> All Present
-                    </button>
-                    <button
-                      onClick={() => handleMarkAll("absent", activeTab === "teachers")}
-                      className="flex-1 bg-red-100 text-red-700 px-3 py-2 rounded-lg hover:bg-red-200 transition-colors flex items-center justify-center gap-2"
-                    >
-                      <XCircle size={16} /> All Absent
-                    </button>
+
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                      Quick Actions
+                    </label>
+                    <div className="flex gap-2">
+                      <button
+                        onClick={() => handleMarkAll("present", activeTab === "teachers")}
+                        className="flex-1 bg-green-600 text-white px-3 py-2 rounded-lg hover:bg-green-700 transition-colors text-xs sm:text-sm flex items-center justify-center gap-1"
+                      >
+                        <UserCheck size={14} /> All Present
+                      </button>
+                      <button
+                        onClick={() => handleMarkAll("absent", activeTab === "teachers")}
+                        className="flex-1 bg-red-600 text-white px-3 py-2 rounded-lg hover:bg-red-700 transition-colors text-xs sm:text-sm flex items-center justify-center gap-1"
+                      >
+                        <UserX size={14} /> All Absent
+                      </button>
+                    </div>
                   </div>
                 </div>
-              )}
-            </div>
-          )}
-
-          {activeTab === "monthly" && (
-            <div className="p-4">
-              <div className="flex justify-between items-center mb-4">
-                <h3 className="font-medium text-gray-800 flex items-center gap-2">
-                  <CalendarIcon size={20} /> Monthly Attendance Report
-                </h3>
-                <button
-                  onClick={() => setCompactReportView(!compactReportView)}
-                  className="bg-gray-100 text-gray-700 px-4 py-2 rounded-lg hover:bg-gray-200 transition-colors flex items-center gap-2"
-                >
-                  {compactReportView ? "Detailed View" : "Compact View"}
-                </button>
-              </div>
-              <div className="overflow-x-auto">
-                <table className="w-full">
-                  <thead className="bg-gradient-to-r from-[#2E86C1] to-[#3498DB] text-white">
-                    <tr>
-                      <th className="p-4 text-left font-semibold">
-                        {activeTab === "students" ? "Roll No" : "ID"}
-                      </th>
-                      <th className="p-4 text-left font-semibold">Name</th>
-                      {compactReportView ? (
-                        <th className="p-4 text-left font-semibold">Summary</th>
-                      ) : (
-                        datesArray.map((date) => (
-                          <th
-                            key={date}
-                            className={
-                              "p-4 text-center font-semibold" +
-                              (isDayIncomplete(date, activeTab === "teachers") ? " bg-yellow-200 text-yellow-800" : "")
-                            }
-                          >
-                            {new Date(date).getDate()}
-                          </th>
-                        ))
-                      )}
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-gray-200">
-                    {currentFiltered.map((item) => (
-                      <tr key={item.id} className="hover:bg-gray-50 transition-colors">
-                        <td className="p-4 font-medium">
-                          {activeTab === "students" ? item.roll || item.id : item.id}
-                        </td>
-                        <td className="p-4">{item.name || "N/A"}</td>
-                        {compactReportView ? (
-                          <td className="p-4">
-                            {(() => {
-                              const presentDays = datesArray.filter(
-                                (date) => monthlyAttendanceData[date][item.id] === "present"
-                              ).length;
-                              const totalDays = datesArray.length;
-                              const percentage = totalDays > 0 ? Math.round((presentDays / totalDays) * 100) : 0;
-                              return (
-                                <span className="text-sm">
-                                  {presentDays}/{totalDays} ({percentage}%)
-                                </span>
-                              );
-                            })()}
-                          </td>
-                        ) : (
-                          datesArray.map((date) => (
-                            <td key={date} className="p-4 text-center">
-                              {monthlyAttendanceData[date][item.id] === "present" ? (
-                                <CheckCircle size={16} className="text-green-500 mx-auto" />
-                              ) : monthlyAttendanceData[date][item.id] === "absent" ? (
-                                <XCircle size={16} className="text-red-500 mx-auto" />
-                              ) : (
-                                <AlertTriangle size={16} className="text-yellow-500 mx-auto" />
-                              )}
-                            </td>
-                          ))
-                        )}
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
               </div>
             </div>
           )}
 
-          {activeTab !== "monthly" && (
-            <div className="overflow-x-auto">
-              {isLoading ? (
-                <div className="p-8 text-center text-gray-500">
-                  <p className="text-lg">Loading...</p>
-                </div>
-              ) : currentFiltered.length === 0 ? (
-                <div className="p-8 text-center text-gray-500">
-                  <Users size={48} className="mx-auto mb-4 opacity-50" />
-                  <p className="text-lg">No {activeTab} found</p>
-                  <p className="text-sm">Try adjusting your search or filters</p>
-                </div>
-              ) : (
-                <table className="w-full">
-                  <thead className="bg-gradient-to-r from-[#2E86C1] to-[#3498DB] text-white">
-                    <tr>
-                      <th className="p-4 text-left font-semibold">
-                        {activeTab === "students" ? "Roll No" : "ID"}
-                      </th>
-                      <th className="p-4 text-left font-semibold">Name</th>
-                      <th className="p-4 text-left font-semibold">
-                        {activeTab === "students" ? "Class" : "Department"}
-                      </th>
-                      {activeTab === "teachers" && (
-                        <>
-                          <th className="p-4 text-left font-semibold">In Time</th>
-                          <th className="p-4 text-left font-semibold">Out Time</th>
-                          <th className="p-4 text-left font-semibold">Hours</th>
-                        </>
-                      )}
-                      <th className="p-4 text-left font-semibold">Status</th>
-                      <th className="p-4 text-left font-semibold">Actions</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-gray-200">
-                    {currentFiltered.map((item, index) => {
-                      const isPresent =
-                        (activeTab === "students" ? selectedStudents[item.id] : selectedTeachers[item.id]) === "present";
-                      const timeRecord = teacherTimeRecords[item.id] || {};
-
-                      return (
-                        <tr
-                          key={item.id}
-                          className={`hover:bg-gray-50 transition-colors ${index % 2 === 0 ? "bg-white" : "bg-gray-50/50"}`}
-                        >
-                          <td className="p-4 font-medium">
-                            {activeTab === "students" ? item.roll || item.id : item.id}
-                          </td>
-                          <td className="p-4">
-                            <div className="flex items-center gap-3">
-                              <div className={`w-3 h-3 rounded-full ${isPresent ? "bg-green-500" : "bg-red-500"}`}></div>
-                              <span className="font-medium">{item.name || "N/A"}</span>
-                            </div>
-                          </td>
-                          <td className="p-4 text-gray-600">{item.class || item.department || "N/A"}</td>
-                          {activeTab === "teachers" && (
-                            <>
-                              <td className="p-4">
-                                <input
-                                  type="time"
-                                  value={timeRecord.inTime || ""}
-                                  onChange={(e) => handleTimeUpdate(item.id, "inTime", e.target.value)}
-                                  className="w-full p-1 border rounded text-sm"
-                                  disabled={!isPresent}
-                                />
-                              </td>
-                              <td className="p-4">
-                                <input
-                                  type="time"
-                                  value={timeRecord.outTime || ""}
-                                  onChange={(e) => handleTimeUpdate(item.id, "outTime", e.target.value)}
-                                  className="w-full p-1 border rounded text-sm"
-                                  disabled={!isPresent}
-                                />
-                              </td>
-                              <td className="p-4">
-                                <span
-                                  className={`px-2 py-1 rounded text-xs font-medium ${
-                                    calculateWorkingHours(timeRecord) >= 8
-                                      ? "bg-green-100 text-green-800"
-                                      : "bg-yellow-100 text-yellow-800"
-                                  }`}
-                                >
-                                  {calculateWorkingHours(timeRecord).toFixed(1)}h
-                                </span>
-                              </td>
-                            </>
-                          )}
-                          <td className="p-4">
-                            <button
-                              onClick={() => handleToggle(item.id, activeTab === "teachers")}
-                              className={`px-4 py-2 rounded-lg flex items-center gap-2 transition-all transform hover:scale-105 ${
-                                isPresent
-                                  ? "bg-green-100 text-green-700 hover:bg-green-200 shadow-green-200/50"
-                                  : "bg-red-100 text-red-700 hover:bg-red-200 shadow-red-200/50"
-                              } shadow-lg`}
+          {/* Content Area */}
+          <div className="p-4 sm:p-6">
+            {isLoading ? (
+              <div className="flex justify-center items-center py-12">
+                <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-[#2E86C1]"></div>
+                <span className="ml-3 text-gray-600">Loading attendance data...</span>
+              </div>
+            ) : (
+              <>
+                {/* Students Tab */}
+                {activeTab === "students" && (
+                  <div className="space-y-4">
+                    {filteredStudents.length === 0 ? (
+                      <div className="text-center py-12 bg-gray-50 rounded-lg">
+                        <Users className="mx-auto h-12 w-12 text-gray-400 mb-4" />
+                        <h3 className="text-lg font-medium text-gray-900 mb-2">No Students Found</h3>
+                        <p className="text-gray-500">Try adjusting your search or filter criteria.</p>
+                      </div>
+                    ) : (
+                      <>
+                        <div className="grid gap-3 sm:gap-4">
+                          {filteredStudents.map((student) => (
+                            <div
+                              key={student.id}
+                              className={`p-4 rounded-lg border-2 transition-all hover:shadow-md ${selectedStudents[student.id] === "present"
+                                ? "border-green-300 bg-green-50"
+                                : selectedStudents[student.id] === "absent"
+                                  ? "border-red-300 bg-red-50"
+                                  : "border-gray-200 bg-white hover:border-gray-300"
+                                }`}
                             >
-                              {isPresent ? <CheckCircle size={16} /> : <XCircle size={16} />}
-                              {isPresent ? "Present" : "Absent"}
-                            </button>
-                          </td>
-                          <td className="p-4">
-                            <div className="flex gap-2">
-                              {activeTab === "teachers" && (
-                                <>
-                                  <button
-                                    onClick={() => markTeacherPresent(item.id, "in")}
-                                    className="bg-blue-100 text-blue-700 px-2 py-1 rounded text-xs hover:bg-blue-200 flex items-center gap-1"
-                                  >
-                                    <LogIn size={12} /> Clock In
-                                  </button>
-                                  <button
-                                    onClick={() => markTeacherPresent(item.id, "out")}
-                                    className="bg-purple-100 text-purple-700 px-2 py-1 rounded text-xs hover:bg-purple-200 flex items-center gap-1"
-                                  >
-                                    <LogOut size={12} /> Clock Out
-                                  </button>
-                                </>
+                              <div className="flex items-center justify-between">
+                                <div className="flex-1 min-w-0">
+                                  <div className="flex items-center gap-3">
+                                    <div className="flex-shrink-0">
+                                      <div className="w-10 h-10 bg-gradient-to-br from-blue-500 to-purple-600 rounded-full flex items-center justify-center text-white font-bold text-sm">
+                                        {student.name?.charAt(0)?.toUpperCase() || "S"}
+                                      </div>
+                                    </div>
+                                    <div className="flex-1 min-w-0">
+                                      <h4 className="text-sm sm:text-base font-semibold text-gray-900 truncate">
+                                        {student.name || "Unknown Student"}
+                                      </h4>
+                                      <div className="flex items-center gap-4 text-xs sm:text-sm text-gray-500">
+                                        <span>Roll: {student.roll || student.id}</span>
+                                        <span>Class: {student.class || "N/A"}</span>
+                                      </div>
+                                    </div>
+                                  </div>
+                                </div>
+
+                                <div className="flex items-center gap-2 ml-4">
+                                  {quickMarkMode ? (
+                                    <div className="flex gap-1">
+                                      <button
+                                        onClick={() => handleQuickMark(student.id, "present")}
+                                        className={`px-3 py-1 rounded text-xs font-medium transition-colors ${selectedStudents[student.id] === "present"
+                                          ? "bg-green-600 text-white"
+                                          : "bg-green-100 text-green-700 hover:bg-green-200"
+                                          }`}
+                                      >
+                                        Present
+                                      </button>
+                                      <button
+                                        onClick={() => handleQuickMark(student.id, "absent")}
+                                        className={`px-3 py-1 rounded text-xs font-medium transition-colors ${selectedStudents[student.id] === "absent"
+                                          ? "bg-red-600 text-white"
+                                          : "bg-red-100 text-red-700 hover:bg-red-200"
+                                          }`}
+                                      >
+                                        Absent
+                                      </button>
+                                    </div>
+                                  ) : (
+                                    <button
+                                      onClick={() => handleToggle(student.id)}
+                                      className={`px-4 py-2 rounded-lg font-medium transition-all text-sm ${selectedStudents[student.id] === "present"
+                                        ? "bg-green-600 text-white hover:bg-green-700"
+                                        : selectedStudents[student.id] === "absent"
+                                          ? "bg-red-600 text-white hover:bg-red-700"
+                                          : "bg-gray-100 text-gray-700 hover:bg-gray-200"
+                                        }`}
+                                    >
+                                      {selectedStudents[student.id] === "present"
+                                        ? "Present"
+                                        : selectedStudents[student.id] === "absent"
+                                          ? "Absent"
+                                          : "Mark"}
+                                    </button>
+                                  )}
+                                </div>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+
+                        <div className="flex justify-center pt-6">
+                          <button
+                            onClick={() => handleSubmit(false)}
+                            className="bg-[#2E86C1] text-white px-6 py-3 rounded-lg hover:bg-blue-700 transition-colors flex items-center gap-2 font-medium shadow-lg"
+                          >
+                            <Save size={18} />
+                            Save Student Attendance
+                          </button>
+                        </div>
+                      </>
+                    )}
+                  </div>
+                )}
+
+                {/* Teachers Tab */}
+                {activeTab === "teachers" && (
+                  <div className="space-y-4">
+                    {filteredTeachers.length === 0 ? (
+                      <div className="text-center py-12 bg-gray-50 rounded-lg">
+                        <Users className="mx-auto h-12 w-12 text-gray-400 mb-4" />
+                        <h3 className="text-lg font-medium text-gray-900 mb-2">No Teachers Found</h3>
+                        <p className="text-gray-500">Try adjusting your search criteria.</p>
+                      </div>
+                    ) : (
+                      <>
+                        <div className="grid gap-4">
+                          {filteredTeachers.map((teacher) => (
+                            <div
+                              key={teacher.id}
+                              className={`p-4 sm:p-6 rounded-lg border-2 transition-all ${selectedTeachers[teacher.id] === "present"
+                                ? "border-green-300 bg-green-50"
+                                : selectedTeachers[teacher.id] === "absent"
+                                  ? "border-red-300 bg-red-50"
+                                  : "border-gray-200 bg-white hover:border-gray-300"
+                                }`}
+                            >
+                              <div className="flex flex-col lg:flex-row gap-4">
+                                {/* Teacher Info */}
+                                <div className="flex items-center gap-3 flex-1 min-w-0">
+                                  <div className="flex-shrink-0">
+                                    <div className="w-12 h-12 bg-gradient-to-br from-purple-500 to-pink-600 rounded-full flex items-center justify-center text-white font-bold">
+                                      {teacher.name?.charAt(0)?.toUpperCase() || "T"}
+                                    </div>
+                                  </div>
+                                  <div className="flex-1 min-w-0">
+                                    <h4 className="text-base sm:text-lg font-semibold text-gray-900 truncate">
+                                      {teacher.name || "Unknown Teacher"}
+                                    </h4>
+                                    <div className="flex items-center gap-4 text-sm text-gray-500">
+                                      <span>ID: {teacher.id}</span>
+                                      <span>Subject: {teacher.subject || "N/A"}</span>
+                                    </div>
+                                  </div>
+                                </div>
+
+                                {/* Time Management */}
+                                {selectedTeachers[teacher.id] === "present" && (
+                                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 flex-2">
+                                    <div>
+                                      <label className="block text-xs font-medium text-gray-700 mb-1">
+                                        In Time
+                                      </label>
+                                      <input
+                                        type="time"
+                                        value={teacherTimeRecords[teacher.id]?.inTime || ""}
+                                        onChange={(e) => handleTimeUpdate(teacher.id, "inTime", e.target.value)}
+                                        className="w-full p-2 border border-gray-300 rounded text-sm focus:ring-2 focus:ring-[#2E86C1] focus:border-transparent"
+                                      />
+                                    </div>
+                                    <div>
+                                      <label className="block text-xs font-medium text-gray-700 mb-1">
+                                        Out Time
+                                      </label>
+                                      <input
+                                        type="time"
+                                        value={teacherTimeRecords[teacher.id]?.outTime || ""}
+                                        onChange={(e) => handleTimeUpdate(teacher.id, "outTime", e.target.value)}
+                                        className="w-full p-2 border border-gray-300 rounded text-sm focus:ring-2 focus:ring-[#2E86C1] focus:border-transparent"
+                                      />
+                                    </div>
+                                    <div>
+                                      <label className="block text-xs font-medium text-gray-700 mb-1">
+                                        Break (min)
+                                      </label>
+                                      <input
+                                        type="number"
+                                        min="0"
+                                        value={teacherTimeRecords[teacher.id]?.breakTime || 0}
+                                        onChange={(e) => handleTimeUpdate(teacher.id, "breakTime", parseInt(e.target.value) || 0)}
+                                        className="w-full p-2 border border-gray-300 rounded text-sm focus:ring-2 focus:ring-[#2E86C1] focus:border-transparent"
+                                      />
+                                    </div>
+                                    <div>
+                                      <label className="block text-xs font-medium text-gray-700 mb-1">
+                                        Working Hours
+                                      </label>
+                                      <div className="p-2 bg-gray-100 rounded text-sm font-medium text-center">
+                                        {calculateWorkingHours(teacherTimeRecords[teacher.id] || {}).toFixed(1)}h
+                                      </div>
+                                    </div>
+                                  </div>
+                                )}
+
+                                {/* Action Buttons */}
+                                <div className="flex items-center gap-2 flex-shrink-0">
+                                  {quickMarkMode ? (
+                                    <div className="flex gap-1">
+                                      <button
+                                        onClick={() => handleQuickMark(teacher.id, "present", true)}
+                                        className={`px-3 py-1 rounded text-xs font-medium transition-colors ${selectedTeachers[teacher.id] === "present"
+                                          ? "bg-green-600 text-white"
+                                          : "bg-green-100 text-green-700 hover:bg-green-200"
+                                          }`}
+                                      >
+                                        Present
+                                      </button>
+                                      <button
+                                        onClick={() => handleQuickMark(teacher.id, "absent", true)}
+                                        className={`px-3 py-1 rounded text-xs font-medium transition-colors ${selectedTeachers[teacher.id] === "absent"
+                                          ? "bg-red-600 text-white"
+                                          : "bg-red-100 text-red-700 hover:bg-red-200"
+                                          }`}
+                                      >
+                                        Absent
+                                      </button>
+                                    </div>
+                                  ) : (
+                                    <div className="flex gap-2">
+                                      <button
+                                        onClick={() => markTeacherPresent(teacher.id, "in")}
+                                        className="bg-green-600 text-white px-3 py-2 rounded-lg hover:bg-green-700 transition-colors flex items-center gap-1 text-sm"
+                                      >
+                                        <LogIn size={14} />
+                                        Clock In
+                                      </button>
+                                      <button
+                                        onClick={() => markTeacherPresent(teacher.id, "out")}
+                                        className="bg-blue-600 text-white px-3 py-2 rounded-lg hover:bg-blue-700 transition-colors flex items-center gap-1 text-sm"
+                                      >
+                                        <LogOut size={14} />
+                                        Clock Out
+                                      </button>
+                                      <button
+                                        onClick={() => handleToggle(teacher.id, true)}
+                                        className={`px-4 py-2 rounded-lg font-medium transition-all text-sm ${selectedTeachers[teacher.id] === "present"
+                                          ? "bg-green-600 text-white hover:bg-green-700"
+                                          : selectedTeachers[teacher.id] === "absent"
+                                            ? "bg-red-600 text-white hover:bg-red-700"
+                                            : "bg-gray-100 text-gray-700 hover:bg-gray-200"
+                                          }`}
+                                      >
+                                        {selectedTeachers[teacher.id] === "present"
+                                          ? "Present"
+                                          : selectedTeachers[teacher.id] === "absent"
+                                            ? "Absent"
+                                            : "Mark"}
+                                      </button>
+                                    </div>
+                                  )}
+                                </div>
+                              </div>
+
+                              {/* Additional Info */}
+                              {selectedTeachers[teacher.id] === "present" && (
+                                <div className="mt-4 pt-4 border-t border-gray-200">
+                                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                                    <div>
+                                      <label className="block text-xs font-medium text-gray-700 mb-1">
+                                        Location
+                                      </label>
+                                      <input
+                                        type="text"
+                                        placeholder="Auto-filled with GPS or enter manually"
+                                        value={teacherTimeRecords[teacher.id]?.location || ""}
+                                        onChange={(e) => handleTimeUpdate(teacher.id, "location", e.target.value)}
+                                        className="w-full p-2 border border-gray-300 rounded text-sm focus:ring-2 focus:ring-[#2E86C1] focus:border-transparent"
+                                      />
+                                    </div>
+                                    <div>
+                                      <label className="block text-xs font-medium text-gray-700 mb-1">
+                                        Notes
+                                      </label>
+                                      <input
+                                        type="text"
+                                        placeholder="Optional notes"
+                                        value={teacherTimeRecords[teacher.id]?.notes || ""}
+                                        onChange={(e) => handleTimeUpdate(teacher.id, "notes", e.target.value)}
+                                        className="w-full p-2 border border-gray-300 rounded text-sm focus:ring-2 focus:ring-[#2E86C1] focus:border-transparent"
+                                      />
+                                    </div>
+                                  </div>
+                                </div>
                               )}
                             </div>
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              )}
-            </div>
-          )}
+                          ))}
+                        </div>
 
-          {activeTab !== "monthly" && (
-            <div className="p-4 bg-gray-50 flex flex-col md:flex-row justify-between items-center gap-4">
-              <div className="flex items-center gap-2 text-gray-600">
-                <CalendarIcon size={16} />
-                <span>Attendance for {new Date(filterDate).toLocaleDateString()}</span>
-              </div>
-              <div className="flex gap-3">
-                <button
-                  onClick={() => handleSubmit(activeTab === "teachers")}
-                  className="bg-[#2E86C1] text-white px-6 py-2 rounded-lg hover:bg-[#256D9B] transition-colors flex items-center gap-2 shadow-lg"
-                >
-                  <Save size={20} /> Save Attendance
-                </button>
-                <button
-                  onClick={() => {
-                    setSelectedStudents({});
-                    setSelectedTeachers({});
-                    setTeacherTimeRecords({});
-                    Swal.fire({
-                      icon: "info",
-                      title: "Attendance Reset",
-                      text: "All attendance selections have been cleared.",
-                      confirmButtonColor: "#2E86C1",
-                      confirmButtonText: "OK",
-                    });
-                  }}
-                  className="bg-gray-100 text-gray-700 px-6 py-2 rounded-lg hover:bg-gray-200 transition-colors flex items-center gap-2 shadow-lg"
-                >
-                  <XCircle size={20} /> Reset
-                </button>
-              </div>
-            </div>
-          )}
+                        <div className="flex justify-center pt-6">
+                          <button
+                            onClick={() => handleSubmit(true)}
+                            className="bg-[#2E86C1] text-white px-6 py-3 rounded-lg hover:bg-blue-700 transition-colors flex items-center gap-2 font-medium shadow-lg"
+                          >
+                            <Save size={18} />
+                            Save Teacher Attendance
+                          </button>
+                        </div>
+                      </>
+                    )}
+                  </div>
+                )}
+
+                {/* Monthly Report Tab */}
+                {(activeTab === "monthly" ||
+                  activeTab === "monthly-students" ||
+                  activeTab === "monthly-teachers") && (
+                    <MonthlyReportTable
+                      activeTab={activeTab}
+                      students={students}
+                      teachers={teachers}
+                      attendance={attendance}
+                      teacherAttendance={teacherAttendance}
+                      selectedMonth={selectedMonth}
+                      selectedYear={selectedYear}
+                      datesArray={datesArray}
+                      setSelectedMonth={setSelectedMonth}
+                      setSelectedYear={setSelectedYear}
+                      setActiveTab={setActiveTab}
+                      setSearchTerm={setSearchTerm}
+                      filteredTeachers={filteredTeachers}
+                      filteredStudents={filteredStudents}
+                      monthlyAttendanceData={monthlyAttendanceData}
+                      averageAttendance={averageAttendance}
+                      compactReportView={compactReportView}
+                      setCompactReportView={setCompactReportView}
+                    />
+                  )}
+              </>
+            )}
+          </div>
+
         </div>
       </div>
     </AdminLayout>
